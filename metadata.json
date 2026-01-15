@@ -1,0 +1,7 @@
+{
+  "name": "2you2be pomelli",
+  "description": "Create stunning Full HD lyric videos from MP3 files and text using Gemini AI and Veo video generation.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
