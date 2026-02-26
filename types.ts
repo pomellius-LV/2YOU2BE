@@ -1,8 +1,14 @@
 
 export interface LyricLine {
+  id: string;
   text: string;
   startTime: number;
   endTime: number;
+  mediaUrl?: string;
+  mediaType?: 'image' | 'video';
+  mediaTrimStart?: number;
+  mediaTrimEnd?: number;
+  color?: string;
 }
 
 export interface MediaLayer {

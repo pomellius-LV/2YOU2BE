@@ -13,11 +13,14 @@ interface Props {
   fadeSettings?: FadeSettings;
   setFadeSettings?: (settings: FadeSettings) => void;
   onSeek: (time: number) => void;
+  onLyricsUpdate: (newLyrics: LyricLine[]) => void;
 }
 
-const Timeline: React.FC<Props> = ({ audioUrl, currentTime, duration, lyrics, images, audioSettings, onSeek, setAudioSettings, fadeSettings, setFadeSettings }) => {
+const Timeline: React.FC<Props> = ({ audioUrl, currentTime, duration, lyrics, images, audioSettings, onSeek, setAudioSettings, fadeSettings, setFadeSettings, onLyricsUpdate }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [waveform, setWaveform] = useState<Float32Array | null>(null);
+  const [draggingBlock, setDraggingBlock] = useState<{ id: string, type: 'move' | 'resize-start' | 'resize-end', initialX: number, initialStart: number, initialEnd: number } | null>(null);
 
   useEffect(() => {
     if (!audioUrl) return;
@@ -68,22 +71,110 @@ const Timeline: React.FC<Props> = ({ audioUrl, currentTime, duration, lyrics, im
     if (duration > 0) {
         const startX = (audioSettings.trimStart / duration) * width;
         const endX = ((duration - audioSettings.trimEnd) / duration) * width;
-        ctx.fillStyle = 'rgba(244, 63, 94, 0.2)';
+        ctx.fillStyle = 'rgba(244, 63, 94, 0.1)';
         if (startX > 0) ctx.fillRect(0, 0, startX, height);
         if (endX < width) ctx.fillRect(endX, 0, width - endX, height);
         ctx.fillStyle = '#f43f5e';
         if (startX > 0) ctx.fillRect(startX, 0, 1, height);
         if (endX < width) ctx.fillRect(endX - 1, 0, 1, height);
     }
-    ctx.fillStyle = '#f59e0b';
-    lyrics.forEach((line) => { if (line.startTime > 0) ctx.fillRect((line.startTime / duration) * width, height - 10, 2, 6); });
     ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(playX, 0); ctx.lineTo(playX, height); ctx.stroke();
-  }, [waveform, currentTime, duration, lyrics, images, audioSettings]);
+  }, [waveform, currentTime, duration, audioSettings]);
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!draggingBlock || !containerRef.current || duration <= 0) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const timeAtX = (x / rect.width) * duration;
+    const initialTimeAtX = (draggingBlock.initialX / rect.width) * duration;
+    const delta = timeAtX - initialTimeAtX;
+
+    const nl = [...lyrics];
+    const idx = nl.findIndex(l => l.id === draggingBlock.id);
+    if (idx === -1) return;
+
+    if (draggingBlock.type === 'move') {
+      const blockDuration = draggingBlock.initialEnd - draggingBlock.initialStart;
+      let newStart = draggingBlock.initialStart + delta;
+      if (newStart < 0) newStart = 0;
+      nl[idx].startTime = newStart;
+      nl[idx].endTime = newStart + blockDuration;
+    } else if (draggingBlock.type === 'resize-start') {
+      nl[idx].startTime = Math.min(draggingBlock.initialEnd - 0.1, Math.max(0, draggingBlock.initialStart + delta));
+    } else if (draggingBlock.type === 'resize-end') {
+      nl[idx].endTime = Math.max(draggingBlock.initialStart + 0.1, draggingBlock.initialEnd + delta);
+    }
+    onLyricsUpdate(nl);
+  };
+
+  const handleMouseUp = () => {
+    setDraggingBlock(null);
+  };
 
   return (
-    <div className="w-full space-y-3">
-        <div className="w-full bg-black rounded-xl border border-white/5 overflow-hidden h-[60px] cursor-pointer" onClick={(e)=>{const r=e.currentTarget.getBoundingClientRect(); onSeek(((e.clientX-r.left)/r.width)*duration)}}>
-            <canvas ref={canvasRef} width={1000} height={60} className="w-full h-full" />
+    <div className="w-full space-y-3 select-none" onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
+        <div 
+          ref={containerRef}
+          className="w-full bg-black rounded-xl border border-white/5 overflow-hidden h-[80px] cursor-pointer relative" 
+          onClick={(e)=>{
+            if (draggingBlock) return;
+            const r=e.currentTarget.getBoundingClientRect(); 
+            onSeek(((e.clientX-r.left)/r.width)*duration)
+          }}
+        >
+            <canvas ref={canvasRef} width={1000} height={80} className="w-full h-full opacity-50" />
+            
+            {/* Blocks Layer */}
+            <div className="absolute inset-0 pointer-events-none">
+              {lyrics.map((line) => {
+                const start = (line.startTime / duration) * 100;
+                const end = (line.endTime / duration) * 100;
+                const width = end - start;
+                if (width <= 0) return null;
+
+                return (
+                  <div 
+                    key={line.id}
+                    className="absolute h-8 border rounded-md pointer-events-auto flex items-center px-2 overflow-hidden group"
+                    style={{ 
+                      left: `${start}%`, 
+                      width: `${width}%`, 
+                      top: '10px',
+                      backgroundColor: `${line.color}33`, // 20% opacity
+                      borderColor: line.color
+                    }}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                      setDraggingBlock({ id: line.id, type: 'move', initialX: e.clientX, initialStart: line.startTime, initialEnd: line.endTime });
+                    }}
+                  >
+                    <span className="text-[8px] font-black text-white truncate uppercase tracking-tighter pointer-events-none">{line.text || 'Empty Block'}</span>
+                    
+                    {/* Resize Handles */}
+                    <div 
+                      className="absolute left-0 top-0 bottom-0 w-2 bg-white/50 hover:bg-white cursor-ew-resize opacity-0 group-hover:opacity-100 transition-opacity"
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        setDraggingBlock({ id: line.id, type: 'resize-start', initialX: e.clientX, initialStart: line.startTime, initialEnd: line.endTime });
+                      }}
+                    />
+                    <div 
+                      className="absolute right-0 top-0 bottom-0 w-2 bg-white/50 hover:bg-white cursor-ew-resize opacity-0 group-hover:opacity-100 transition-opacity"
+                      onMouseDown={(e) => {
+                        e.stopPropagation();
+                        setDraggingBlock({ id: line.id, type: 'resize-end', initialX: e.clientX, initialStart: line.startTime, initialEnd: line.endTime });
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Playhead */}
+            <div 
+              className="absolute top-0 bottom-0 w-0.5 bg-white shadow-[0_0_10px_rgba(255,255,255,0.8)] z-10 pointer-events-none"
+              style={{ left: `${(currentTime / duration) * 100}%` }}
+            />
         </div>
         <div className="flex items-center gap-2 text-[10px] font-mono">
             <span className="text-cyan-400 w-12 text-right">{currentTime.toFixed(1)}s</span>
